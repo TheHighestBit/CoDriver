@@ -2490,7 +2490,12 @@ async function openItem(element, dualPaneSide, shortcutDirPath = null) {
 				return;
 			}
 		} else if (IsItemPreviewOpen == false) {
-			await invoke("open_item", { path });
+			if (path.startsWith("gdrive:/")) {
+				showToast("Downloading file into a temporary directory...", ToastType.INFO, 3000);
+			}
+			await invoke("open_item", {path}).catch((e) => {
+				showToast(e, ToastType.ERROR, 5000);
+			});
 		}
 	}
 }
@@ -4097,7 +4102,14 @@ async function insertSiteNavButtons() {
 
 	let gdriveButton = document.createElement("button");
 	gdriveButton.className = "site-nav-bar-button";
-	gdriveButton.onclick = () => openDirAndSwitch("gdrive:/Root");
+	gdriveButton.onclick = async () => {
+		if (!await invoke("is_gdrive_initialized")) {
+			showToast("Authenticating... If this is your first time, please authenticate in the browser", ToastType.INFO, 10000);
+		}
+
+		await openDirAndSwitch("gdrive:/Root");
+		showToast("Authenticated with Google Drive", ToastType.SUCCESS);
+	};
 	gdriveButton.innerHTML = `<i class="fa-brands fa-google-drive"></i> Google Drive`;
 	document.querySelector(".site-nav-bar").append(gdriveButton);
 

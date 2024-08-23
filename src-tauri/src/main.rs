@@ -149,7 +149,8 @@ fn main() {
             log,
             get_config_location,
             get_sshfs_mounts,
-            unmount_network_drive
+            unmount_network_drive,
+            is_gdrive_initialized
         ])
         .plugin(tauri_plugin_drag::init())
         .run(tauri::generate_context!())
@@ -452,7 +453,7 @@ async fn switch_to_directory(current_dir: String) {
     let _ = set_dir(current_dir.into()).await;
 }
 #[tauri::command]
-async fn switch_view(view_mode: String) -> Vec<FDir> {
+async fn switch_view(view_mode: String) -> Result<Vec<FDir>, String> {
     let app_config_file = File::open(
         app_config_dir(&Config::default())
             .unwrap()
@@ -507,14 +508,14 @@ async fn set_dir(current_dir: String) -> bool {
 }
 
 #[tauri::command]
-async fn list_dirs() -> Vec<FDir> {
+async fn list_dirs() -> Result<Vec<FDir>, String> {
     let current_dir = CURRENT_DIR.lock().await.clone();
 
     if current_dir.starts_with("gdrive:/") {
-        let mut gdrive = get_gdrive().await.lock().await;
+        let mut gdrive = get_gdrive().await?.lock().await;
         return tauri::async_runtime::spawn_blocking(move || {
             gdrive.read_dir(&current_dir)
-        }).await.unwrap();
+        }).await.map_err(|e| e.to_string())?;
     };
     
     let mut dir_list: Vec<FDir> = Vec::new();
@@ -555,7 +556,7 @@ async fn list_dirs() -> Vec<FDir> {
         });
     }
     dir_list.sort_by_key(|a| a.name.to_lowercase());
-    return dir_list;
+    return Ok(dir_list);
 }
 
 #[tauri::command]
@@ -590,7 +591,7 @@ async fn go_back(is_dual_pane: bool) {
 }
 
 #[tauri::command]
-async fn go_to_dir(directory: u8) -> Vec<FDir> {
+async fn go_to_dir(directory: u8) -> Result<Vec<FDir>, String> {
     let wanted_directory = match directory {
         0 => set_dir(desktop_dir().unwrap_or_default().to_str().unwrap().into()).await,
         1 => set_dir(download_dir().unwrap_or_default().to_str().unwrap().into()).await,
@@ -1082,9 +1083,21 @@ async fn extract_item(from_path: String, app_window: Window) {
 }
 
 #[tauri::command]
-async fn open_item(path: String) {
+async fn open_item(path: String) -> Result<(), String> {
     dbg_log(format!("Opening: {}", &path));
-    let _ = open::that_detached(path);
+    if path.starts_with("gdrive:/") {
+        let gdrive = get_gdrive().await?.lock().await;
+
+        let temp_path = tauri::async_runtime::spawn_blocking(move || {
+            gdrive.download_file(&path)
+        }).await.map_err(|e| e.to_string())?;
+
+        open::that_detached(temp_path?).unwrap();
+    } else {
+        open::that_detached(path).unwrap();
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -1268,7 +1281,7 @@ async fn create_file(file_name: String) {
 }
 
 #[tauri::command]
-async fn rename_element(path: String, new_name: String, app_window: Window) -> Vec<FDir> {
+async fn rename_element(path: String, new_name: String, app_window: Window) -> Result<Vec<FDir>, String> {
     let renamed = fs::rename(
         CURRENT_DIR.lock().await.join(&path.replace("\\", "/")),
         CURRENT_DIR.lock().await.join(&new_name.replace("\\", "/")),
@@ -1959,9 +1972,23 @@ async fn unmount_network_drive(path: String) {
     dbg_log(format!("Removed: {}", path));
 }
 
-async fn get_gdrive() -> &'static Mutex<GDrive> {
-    GDRIVE.get_or_init(|| async {
-        let gdrive = tauri::async_runtime::spawn_blocking(|| GDrive::new()).await.unwrap();
-        Mutex::new(gdrive)
-    }).await
+#[tauri::command]
+async fn is_gdrive_initialized() -> bool {
+    GDRIVE.get().is_some()
+}
+
+async fn initialize_gdrive() -> Result<(), String> {
+    let gdrive = tauri::async_runtime::spawn_blocking(|| GDrive::new())
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+
+    GDRIVE.set(Mutex::new(gdrive)).map_err(|_| "GDrive is already initialized".to_string())
+}
+
+async fn get_gdrive() -> Result<&'static Mutex<GDrive>, String> {
+    if GDRIVE.get().is_none() {
+        initialize_gdrive().await?;
+    }
+    GDRIVE.get().ok_or_else(|| "Failed to initialize GDrive".to_string())
 }
