@@ -4084,6 +4084,7 @@ async function insertSiteNavButtons() {
 		document.querySelector(".site-nav-bar").append(button);
 	}
 
+
 	let seperator = document.createElement("div");
 	seperator.className = "horizontal-seperator";
 	document.querySelector(".site-nav-bar").append(seperator);
@@ -4093,6 +4094,12 @@ async function insertSiteNavButtons() {
 	diskButton.onclick = () => listDisks();
 	diskButton.innerHTML = `<i class="fa-solid fa-hard-drive"></i> Disks`;
 	document.querySelector(".site-nav-bar").append(diskButton);
+
+	let gdriveButton = document.createElement("button");
+	gdriveButton.className = "site-nav-bar-button";
+	gdriveButton.onclick = () => showFtpConfig();
+	gdriveButton.innerHTML = `<i class="fa-brands fa-google-drive"></i> Google Drive`;
+	document.querySelector(".site-nav-bar").append(gdriveButton);
 
 	if (sshfsMounts.length > 0) {
 		let seperator2 = document.createElement("div");

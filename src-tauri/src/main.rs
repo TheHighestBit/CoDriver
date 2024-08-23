@@ -1,7 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use chrono::prelude::{DateTime, Utc};
-use core::FsState;
+use copy_dir::copy_dir;
 #[allow(unused)]
 use delete::{delete_file, rapid_delete_dir_all};
 use flate2::read::GzDecoder;
@@ -11,18 +11,18 @@ use remove_dir_all::remove_dir_all;
 use rusty_ytdl::{Video, VideoOptions, VideoQuality, VideoSearchOptions};
 use serde::Serialize;
 use serde_json::Value;
-use std::env::current_dir;
 use std::fs::{self, read_dir, remove_dir, OpenOptions};
 #[allow(unused)]
 use std::io::Error;
 #[allow(unused)]
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::process::{Command, Stdio};
-use std::sync::{LazyLock, Mutex};
 use std::{
+    env::{current_dir, set_current_dir},
     fs::{copy, create_dir, remove_file, File},
     path::PathBuf,
 };
+use std::sync::{Arc, LazyLock};
 use stopwatch::Stopwatch;
 use tauri::{
     api::path::{
@@ -52,16 +52,21 @@ mod applications;
 #[allow(unused)]
 use applications::{get_apps, open_file_with};
 use archiver_rs::Compressed;
-mod core;
 mod rdpfs;
-
 use substring::Substring;
+use tauri::async_runtime::Mutex;
+use tokio::sync::OnceCell;
+use crate::gdrive::{CloudProvider, GDrive};
+
+mod gdrive;
 
 static mut ISCANCELED: bool = false;
 
 static mut PATH_HISTORY: Vec<String> = vec![];
 
-static FSSTATE: LazyLock<Mutex<FsState>> = LazyLock::new(|| Mutex::new(FsState::new()));
+static CURRENT_DIR: LazyLock<Mutex<PathBuf>> = LazyLock::new(|| Mutex::new(current_dir().unwrap()));
+
+static GDRIVE: OnceCell<GDrive> = OnceCell::const_new();
 
 // #[cfg(target_os = "windows")]
 // const SLASH: &str = "\\";
@@ -475,10 +480,9 @@ async fn switch_view(view_mode: String) -> Vec<FDir> {
 
 #[tauri::command]
 async fn get_current_dir() -> String {
-    let state = FSSTATE.lock().unwrap();
-
-    return state
-        .current_dir()
+    return CURRENT_DIR
+        .lock()
+        .await
         .as_path()
         .to_str()
         .unwrap()
@@ -489,17 +493,27 @@ async fn get_current_dir() -> String {
 #[tauri::command]
 async fn set_dir(current_dir: String) -> bool {
     dbg_log(format!("Current dir: {}", &current_dir));
-    let mut state = FSSTATE.lock().unwrap();
+    let md = fs::metadata(&current_dir);
+    if md.is_err() {
+        return false;
+    }
 
-    state.set_current_dir(current_dir)
+    let mut current_dir_buf = CURRENT_DIR.lock().await;
+    current_dir_buf.clear();
+    current_dir_buf.push(current_dir);
+    return true;
 }
 
 #[tauri::command]
 async fn list_dirs() -> Vec<FDir> {
-    let state = FSSTATE.lock().unwrap();
+    let gdrive = get_gdrive().await;
 
+    return tauri::async_runtime::spawn_blocking(|| {
+        gdrive.read_dir()
+    }).await.unwrap();
+    
     let mut dir_list: Vec<FDir> = Vec::new();
-    let current_dir = fs::read_dir(state.current_dir()).unwrap();
+    let current_dir = fs::read_dir(CURRENT_DIR.lock().await.as_path()).unwrap();
     for item in current_dir {
         let temp_item = item.unwrap();
         let name = &temp_item.file_name().into_string().unwrap();
@@ -569,8 +583,6 @@ async fn go_back(is_dual_pane: bool) {
 
 #[tauri::command]
 async fn go_to_dir(directory: u8) -> Vec<FDir> {
-    let current_dir = FSSTATE.lock().unwrap().current_dir();
-
     let wanted_directory = match directory {
         0 => set_dir(desktop_dir().unwrap_or_default().to_str().unwrap().into()).await,
         1 => set_dir(download_dir().unwrap_or_default().to_str().unwrap().into()).await,
@@ -578,13 +590,13 @@ async fn go_to_dir(directory: u8) -> Vec<FDir> {
         3 => set_dir(picture_dir().unwrap_or_default().to_str().unwrap().into()).await,
         4 => set_dir(video_dir().unwrap_or_default().to_str().unwrap().into()).await,
         5 => set_dir(audio_dir().unwrap_or_default().to_str().unwrap().into()).await,
-        _ => set_dir(current_dir.to_str().unwrap().into()).await,
+        _ => set_dir(CURRENT_DIR.lock().await.to_str().unwrap().into()).await,
     };
     if !wanted_directory {
         err_log("Not a valid directory".into());
     } else {
         unsafe {
-            PATH_HISTORY.push(current_dir.to_string_lossy().to_string());
+            PATH_HISTORY.push(CURRENT_DIR.lock().await.to_string_lossy().to_string());
         }
     }
     return list_dirs().await;
@@ -592,12 +604,7 @@ async fn go_to_dir(directory: u8) -> Vec<FDir> {
 
 // :ftp
 #[tauri::command]
-async fn mount_sshfs(
-    hostname: String,
-    username: String,
-    password: String,
-    remote_path: String,
-) -> String {
+async fn mount_sshfs(hostname: String, username: String, password: String, remote_path: String) -> String {
     let remote_address = format!("{}@{}:{}", username, hostname, remote_path);
 
     let mount_point = "/tmp/codriver-sshfs-mount/".to_owned() + &username;
@@ -642,14 +649,14 @@ async fn open_in_terminal(path: String) -> bool {
     #[cfg(target_os = "windows")]
     {
         // Try to open with Windows Terminal first
-        if Command::new("wt").args(["-d", &path]).spawn().is_ok() {
+        if Command::new("wt").args(&["-d", &path]).spawn().is_ok() {
             return true;
         }
 
         // Fallback to PowerShell
         // Have to launch via cmd to get a new terminal window
         if Command::new("cmd")
-            .args([
+            .args(&[
                 "/c",
                 "start",
                 "powershell",
@@ -665,9 +672,8 @@ async fn open_in_terminal(path: String) -> bool {
 
         // Fallback to cmd
         return Command::new("cmd")
-            .args(["/c", "start", "cmd.exe", "/k", "cd", "/d", &path])
-            .spawn()
-            .is_ok();
+            .args(&["/c", "start", "cmd.exe", "/k", "cd", "/d", &path])
+            .spawn().is_ok();
     }
 
     #[cfg(target_os = "macos")]
@@ -678,7 +684,7 @@ async fn open_in_terminal(path: String) -> bool {
 
     #[cfg(target_os = "linux")]
     return Command::new("exo-open")
-        .args(["--working-directory", &path, "--launch", "TerminalEmulator"])
+        .args(&["--working-directory", &path, "--launch", "TerminalEmulator"])
         .spawn()
         .is_ok();
 }
@@ -748,10 +754,7 @@ async fn search_for(
     let sw = Stopwatch::start_new();
 
     let _ = DirWalker::new().set_ext(v_exts).search(
-        {
-            let state = FSSTATE.lock().unwrap();
-            state.current_dir().to_str().unwrap()
-        },
+        CURRENT_DIR.lock().await.to_str().unwrap(),
         search_depth as u32,
         file_name,
         max_items,
@@ -800,7 +803,7 @@ async fn copy_paste(
 ) {
     if copy_to_path.clone().len() == 0 {
         wng_log("No destination path provided. Defaulting to current dir".into());
-        copy_to_path = current_dir().unwrap().to_string_lossy().to_string();
+        copy_to_path = CURRENT_DIR.lock().await.to_string_lossy().to_string();
     }
     unsafe {
         COPY_COUNTER = 0.0;
@@ -852,7 +855,7 @@ async fn arr_copy_paste(
 ) {
     if &copy_to_path.len() == &0 {
         wng_log("No destination path provided. Defaulting to current dir".into());
-        copy_to_path = current_dir().unwrap().to_string_lossy().to_string();
+        copy_to_path = CURRENT_DIR.lock().await.to_string_lossy().to_string();
     }
     unsafe {
         COPY_COUNTER = 0.0;
@@ -1182,8 +1185,9 @@ async fn compress_item(
 
 #[tauri::command]
 async fn arr_compress_items(arr_items: Vec<String>, compression_level: i32, app_window: Window) {
-    let path_to_zip = current_dir()
-        .unwrap()
+    let path_to_zip = CURRENT_DIR
+        .lock()
+        .await
         .join("compressed_items_archive")
         .to_string_lossy()
         .to_string();
@@ -1245,23 +1249,21 @@ async fn arr_compress_items(arr_items: Vec<String>, compression_level: i32, app_
 
 #[tauri::command]
 async fn create_folder(folder_name: String) {
-    let state = FSSTATE.lock().unwrap();
     let new_folder_path = PathBuf::from(&folder_name);
-    let _ = fs::create_dir(state.current_dir().join(new_folder_path));
+    let _ = fs::create_dir(CURRENT_DIR.lock().await.join(new_folder_path));
 }
 
 #[tauri::command]
 async fn create_file(file_name: String) {
-    let state = FSSTATE.lock().unwrap();
     let new_file_path = PathBuf::from(&file_name);
-    let _ = File::create(state.current_dir().join(new_file_path));
+    let _ = File::create(CURRENT_DIR.lock().await.join(new_file_path));
 }
 
 #[tauri::command]
 async fn rename_element(path: String, new_name: String, app_window: Window) -> Vec<FDir> {
     let renamed = fs::rename(
-        current_dir().unwrap().join(&path.replace("\\", "/")),
-        current_dir().unwrap().join(&new_name.replace("\\", "/")),
+        CURRENT_DIR.lock().await.join(&path.replace("\\", "/")),
+        CURRENT_DIR.lock().await.join(&new_name.replace("\\", "/")),
     );
     if renamed.is_err() {
         err_log("Failed to rename element".into());
@@ -1927,7 +1929,9 @@ async fn log(log: String) {
 
 #[tauri::command]
 async fn unmount_network_drive(path: String) {
-    let _ = Command::new("umount").arg(&path).spawn();
+    let _ = Command::new("umount")
+        .arg(&path)
+        .spawn();
     dbg_log(format!("Unmounted: {}", path));
     let remove = remove_dir(&path);
     if remove.is_err() {
@@ -1939,14 +1943,18 @@ async fn unmount_network_drive(path: String) {
             std::thread::sleep(std::time::Duration::from_millis(1000));
             let remove3 = remove_dir(&path);
             if remove3.is_err() {
-                dbg_log(format!(
-                    "Failed to remove: {} | Err: {}",
-                    path,
-                    remove3.err().unwrap()
-                ));
+                dbg_log(format!("Failed to remove: {} | Err: {}", path, remove3.err().unwrap()));
                 return;
             }
         }
     }
     dbg_log(format!("Removed: {}", path));
+}
+
+async fn get_gdrive() -> &'static GDrive {
+    GDRIVE.get_or_init(|| async {
+        tauri::async_runtime::spawn_blocking(|| {
+            GDrive::new()
+        }).await.unwrap()
+    }).await
 }

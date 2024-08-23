@@ -59,6 +59,7 @@ delete = "1.0.1"
 remove_dir_all = "0.8.3"
 copy_dir = "0.1.3"
 drive-v3 = "0.6.1"
+tokio = "1.39.3"
 
 # [profile.dev]
 # rustflags = ["-Z", "threads=7"]
