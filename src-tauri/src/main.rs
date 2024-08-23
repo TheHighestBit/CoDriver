@@ -66,7 +66,7 @@ static mut PATH_HISTORY: Vec<String> = vec![];
 
 static CURRENT_DIR: LazyLock<Mutex<PathBuf>> = LazyLock::new(|| Mutex::new(current_dir().unwrap()));
 
-static GDRIVE: OnceCell<GDrive> = OnceCell::const_new();
+static GDRIVE: OnceCell<Mutex<GDrive>> = OnceCell::const_new();
 
 // #[cfg(target_os = "windows")]
 // const SLASH: &str = "\\";
@@ -493,9 +493,11 @@ async fn get_current_dir() -> String {
 #[tauri::command]
 async fn set_dir(current_dir: String) -> bool {
     dbg_log(format!("Current dir: {}", &current_dir));
-    let md = fs::metadata(&current_dir);
-    if md.is_err() {
-        return false;
+
+    if !current_dir.starts_with("gdrive:/") {
+        if fs::metadata(&current_dir).is_err() {
+            return false;
+        }
     }
 
     let mut current_dir_buf = CURRENT_DIR.lock().await;
@@ -506,11 +508,14 @@ async fn set_dir(current_dir: String) -> bool {
 
 #[tauri::command]
 async fn list_dirs() -> Vec<FDir> {
-    let gdrive = get_gdrive().await;
+    let current_dir = CURRENT_DIR.lock().await.clone();
 
-    return tauri::async_runtime::spawn_blocking(|| {
-        gdrive.read_dir()
-    }).await.unwrap();
+    if current_dir.starts_with("gdrive:/") {
+        let mut gdrive = get_gdrive().await.lock().await;
+        return tauri::async_runtime::spawn_blocking(move || {
+            gdrive.read_dir(&current_dir)
+        }).await.unwrap();
+    };
     
     let mut dir_list: Vec<FDir> = Vec::new();
     let current_dir = fs::read_dir(CURRENT_DIR.lock().await.as_path()).unwrap();
@@ -555,11 +560,14 @@ async fn list_dirs() -> Vec<FDir> {
 
 #[tauri::command]
 async fn open_dir(path: String) -> bool {
-    let md = fs::read_dir(&path);
     dbg_log(format!("Opening dir: {}", &path));
-    if md.is_err() {
-        return false;
+
+    if !path.starts_with("gdrive:/") {
+        if read_dir(&path).is_err() {
+            return false;
+        }
     }
+
     let _ = set_dir(path.clone().into()).await;
     unsafe {
         PATH_HISTORY.push(path);
@@ -1951,10 +1959,9 @@ async fn unmount_network_drive(path: String) {
     dbg_log(format!("Removed: {}", path));
 }
 
-async fn get_gdrive() -> &'static GDrive {
+async fn get_gdrive() -> &'static Mutex<GDrive> {
     GDRIVE.get_or_init(|| async {
-        tauri::async_runtime::spawn_blocking(|| {
-            GDrive::new()
-        }).await.unwrap()
+        let gdrive = tauri::async_runtime::spawn_blocking(|| GDrive::new()).await.unwrap();
+        Mutex::new(gdrive)
     }).await
 }

@@ -4097,7 +4097,7 @@ async function insertSiteNavButtons() {
 
 	let gdriveButton = document.createElement("button");
 	gdriveButton.className = "site-nav-bar-button";
-	gdriveButton.onclick = () => showFtpConfig();
+	gdriveButton.onclick = () => openDirAndSwitch("gdrive:/Root");
 	gdriveButton.innerHTML = `<i class="fa-brands fa-google-drive"></i> Google Drive`;
 	document.querySelector(".site-nav-bar").append(gdriveButton);
 
