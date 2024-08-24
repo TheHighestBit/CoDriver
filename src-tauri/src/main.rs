@@ -1,7 +1,6 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use chrono::prelude::{DateTime, Utc};
-use copy_dir::copy_dir;
 #[allow(unused)]
 use delete::{delete_file, rapid_delete_dir_all};
 use flate2::read::GzDecoder;
@@ -17,12 +16,12 @@ use std::io::Error;
 #[allow(unused)]
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::process::{Command, Stdio};
+use std::sync::LazyLock;
 use std::{
-    env::{current_dir, set_current_dir},
+    env::current_dir,
     fs::{copy, create_dir, remove_file, File},
     path::PathBuf,
 };
-use std::sync::{Arc, LazyLock};
 use stopwatch::Stopwatch;
 use tauri::{
     api::path::{
@@ -53,10 +52,10 @@ mod applications;
 use applications::{get_apps, open_file_with};
 use archiver_rs::Compressed;
 mod rdpfs;
+use crate::gdrive::{CloudProvider, GDrive};
 use substring::Substring;
 use tauri::async_runtime::Mutex;
 use tokio::sync::OnceCell;
-use crate::gdrive::{CloudProvider, GDrive};
 
 mod gdrive;
 
@@ -513,11 +512,11 @@ async fn list_dirs() -> Result<Vec<FDir>, String> {
 
     if current_dir.starts_with("gdrive:/") {
         let mut gdrive = get_gdrive().await?.lock().await;
-        return tauri::async_runtime::spawn_blocking(move || {
-            gdrive.read_dir(&current_dir)
-        }).await.map_err(|e| e.to_string())?;
+        return tauri::async_runtime::spawn_blocking(move || gdrive.read_dir(&current_dir))
+            .await
+            .map_err(|e| e.to_string())?;
     };
-    
+
     let mut dir_list: Vec<FDir> = Vec::new();
     let current_dir = fs::read_dir(CURRENT_DIR.lock().await.as_path()).unwrap();
     for item in current_dir {
@@ -613,7 +612,12 @@ async fn go_to_dir(directory: u8) -> Result<Vec<FDir>, String> {
 
 // :ftp
 #[tauri::command]
-async fn mount_sshfs(hostname: String, username: String, password: String, remote_path: String) -> String {
+async fn mount_sshfs(
+    hostname: String,
+    username: String,
+    password: String,
+    remote_path: String,
+) -> String {
     let remote_address = format!("{}@{}:{}", username, hostname, remote_path);
 
     let mount_point = "/tmp/codriver-sshfs-mount/".to_owned() + &username;
@@ -682,7 +686,8 @@ async fn open_in_terminal(path: String) -> bool {
         // Fallback to cmd
         return Command::new("cmd")
             .args(&["/c", "start", "cmd.exe", "/k", "cd", "/d", &path])
-            .spawn().is_ok();
+            .spawn()
+            .is_ok();
     }
 
     #[cfg(target_os = "macos")]
@@ -725,7 +730,7 @@ async fn search_for(
     file_content: String,
     app_window: Window,
     is_quick_search: bool,
-) {
+) -> Result<(), String> {
     unsafe {
         IS_SEARCHING = true;
         COUNT_CALLED_BACK = 0;
@@ -762,14 +767,16 @@ async fn search_for(
 
     let sw = Stopwatch::start_new();
 
-    let _ = DirWalker::new().set_ext(v_exts).search(
-        CURRENT_DIR.lock().await.to_str().unwrap(),
-        search_depth as u32,
-        file_name,
-        max_items,
-        is_quick_search,
-        file_content,
-        &|item: DirWalkerEntry| {
+    let current_dir = CURRENT_DIR.lock().await.clone();
+    if current_dir.starts_with("gdrive:/") {
+        let mut gdrive = get_gdrive().await?.lock().await;
+
+        let search_result =
+            tauri::async_runtime::spawn_blocking(move || gdrive.search_for(&file_name))
+                .await
+                .map_err(|e| e.to_string())?;
+
+        for item in search_result? {
             unsafe {
                 COUNT_CALLED_BACK += 1;
             }
@@ -783,8 +790,32 @@ async fn search_for(
                 "$('.file-searching-file-count').html('{} items found')",
                 unsafe { COUNT_CALLED_BACK }
             ));
-        },
-    );
+        }
+    } else {
+        let _ = DirWalker::new().set_ext(v_exts).search(
+            CURRENT_DIR.lock().await.to_str().unwrap(),
+            search_depth as u32,
+            file_name,
+            max_items,
+            is_quick_search,
+            file_content,
+            &|item: DirWalkerEntry| {
+                unsafe {
+                    COUNT_CALLED_BACK += 1;
+                }
+                let _ = app_window
+                    .emit_all(
+                        "addSingleItem",
+                        serde_json::to_string(&item).unwrap().to_string(),
+                    )
+                    .expect("Failed to emit");
+                let _ = app_window.eval(&format!(
+                    "$('.file-searching-file-count').html('{} items found')",
+                    unsafe { COUNT_CALLED_BACK }
+                ));
+            },
+        );
+    }
 
     unsafe {
         IS_SEARCHING = false;
@@ -799,7 +830,8 @@ async fn search_for(
     let _ = app_window
         .eval("setTimeout(() => $('.searching-info-container').css('display', 'none'), 1500)");
     dbg_log(format!("Search took: {:?}", sw.elapsed()));
-    return;
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -1088,9 +1120,9 @@ async fn open_item(path: String) -> Result<(), String> {
     if path.starts_with("gdrive:/") {
         let gdrive = get_gdrive().await?.lock().await;
 
-        let temp_path = tauri::async_runtime::spawn_blocking(move || {
-            gdrive.download_file(&path)
-        }).await.map_err(|e| e.to_string())?;
+        let temp_path = tauri::async_runtime::spawn_blocking(move || gdrive.download_file(&path))
+            .await
+            .map_err(|e| e.to_string())?;
 
         open::that_detached(temp_path?).unwrap();
     } else {
@@ -1281,7 +1313,11 @@ async fn create_file(file_name: String) {
 }
 
 #[tauri::command]
-async fn rename_element(path: String, new_name: String, app_window: Window) -> Result<Vec<FDir>, String> {
+async fn rename_element(
+    path: String,
+    new_name: String,
+    app_window: Window,
+) -> Result<Vec<FDir>, String> {
     let renamed = fs::rename(
         CURRENT_DIR.lock().await.join(&path.replace("\\", "/")),
         CURRENT_DIR.lock().await.join(&new_name.replace("\\", "/")),
@@ -1838,7 +1874,11 @@ async fn get_thumbnail(image_path: String) -> String {
 }
 
 #[tauri::command]
-async fn get_simple_dir_info(path: String, app_window: Window, class_to_fill: String) -> SimpleDirInfo {
+async fn get_simple_dir_info(
+    path: String,
+    app_window: Window,
+    class_to_fill: String,
+) -> SimpleDirInfo {
     unsafe {
         CALCED_SIZE = 0;
     }
@@ -1856,16 +1896,18 @@ fn dir_info(path: String, app_window: &Window, class_to_fill: String) -> SimpleD
     if PathBuf::from(&path).is_file() {
         return SimpleDirInfo {
             size: PathBuf::from(&path).metadata().unwrap().len(),
-            count_elements: 1
+            count_elements: 1,
         };
     }
 
     let entry = match fs::read_dir(path) {
         Ok(entry) => entry,
-        Err(_) => return SimpleDirInfo {
-            size: 0,
-            count_elements: 0
-        },
+        Err(_) => {
+            return SimpleDirInfo {
+                size: 0,
+                count_elements: 0,
+            }
+        }
     };
     let mut size = 0;
     let mut count_elements = 0;
@@ -1883,7 +1925,8 @@ fn dir_info(path: String, app_window: &Window, class_to_fill: String) -> SimpleD
                     entry.path().to_string_lossy().to_string(),
                     app_window,
                     class_to_fill.clone(),
-                ).size;
+                )
+                .size;
                 size += dir_size;
             }
             count_elements += 1;
@@ -1891,7 +1934,7 @@ fn dir_info(path: String, app_window: &Window, class_to_fill: String) -> SimpleD
     }
     SimpleDirInfo {
         size,
-        count_elements
+        count_elements,
     }
 }
 
@@ -1950,9 +1993,7 @@ async fn log(log: String) {
 
 #[tauri::command]
 async fn unmount_network_drive(path: String) {
-    let _ = Command::new("umount")
-        .arg(&path)
-        .spawn();
+    let _ = Command::new("umount").arg(&path).spawn();
     dbg_log(format!("Unmounted: {}", path));
     let remove = remove_dir(&path);
     if remove.is_err() {
@@ -1964,7 +2005,11 @@ async fn unmount_network_drive(path: String) {
             std::thread::sleep(std::time::Duration::from_millis(1000));
             let remove3 = remove_dir(&path);
             if remove3.is_err() {
-                dbg_log(format!("Failed to remove: {} | Err: {}", path, remove3.err().unwrap()));
+                dbg_log(format!(
+                    "Failed to remove: {} | Err: {}",
+                    path,
+                    remove3.err().unwrap()
+                ));
                 return;
             }
         }
@@ -1983,12 +2028,16 @@ async fn initialize_gdrive() -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
 
-    GDRIVE.set(Mutex::new(gdrive)).map_err(|_| "GDrive is already initialized".to_string())
+    GDRIVE
+        .set(Mutex::new(gdrive))
+        .map_err(|_| "GDrive is already initialized".to_string())
 }
 
 async fn get_gdrive() -> Result<&'static Mutex<GDrive>, String> {
     if GDRIVE.get().is_none() {
         initialize_gdrive().await?;
     }
-    GDRIVE.get().ok_or_else(|| "Failed to initialize GDrive".to_string())
+    GDRIVE
+        .get()
+        .ok_or_else(|| "Failed to initialize GDrive".to_string())
 }
