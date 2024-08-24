@@ -4090,7 +4090,7 @@ async function insertSiteNavButtons() {
     let gdriveButton = document.createElement("button");
     gdriveButton.className = "site-nav-bar-button";
     gdriveButton.onclick = async () => {
-        if (!await invoke("is_gdrive_initialized")) {
+        if (!await invoke("is_gdrive_authenticated")) {
             showToast("Authenticating... If this is your first time, please authenticate in the browser", ToastType.INFO, 10000);
         }
 

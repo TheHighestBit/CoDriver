@@ -7,11 +7,11 @@ use std::fs;
 use std::path::PathBuf;
 
 pub trait CloudProvider {
-    fn new() -> Result<Self, String>
-    where
-        Self: Sized;
+    fn new() -> Self;
 
-    fn authenticate() -> Result<Credentials, String>;
+    fn authenticate(&mut self) -> Result<(), String>;
+
+    fn sign_out(&mut self) -> Result<(), String>;
 
     fn read_dir(&mut self, path: &PathBuf) -> Result<Vec<FDir>, String>;
 
@@ -21,26 +21,23 @@ pub trait CloudProvider {
 }
 
 pub struct GDrive {
-    drive: Drive,
+    drive: Option<Drive>,
     cache: HashMap<String, File>,
 }
 
 impl CloudProvider for GDrive {
-    fn new() -> Result<Self, String> {
-        let credentials = GDrive::authenticate()?;
-
+    fn new() -> Self {
         let mut root_file = File::new();
         root_file.name = Some("gdrive:".to_string());
         root_file.id = Some("root".to_string());
 
-        Ok(GDrive {
-            drive: Drive::new(&credentials),
+        GDrive {
+            drive: None,
             cache: HashMap::from([("gdrive:".to_string(), root_file)]),
-        })
+        }
     }
 
-    fn authenticate() -> Result<Credentials, String> {
-        // TODO - Think about how to store these securely
+    fn authenticate(&mut self) -> Result<(), String> {
         let client_secrets_path = "client_secret.json";
         let scopes: Vec<&str> = vec!["https://www.googleapis.com/auth/drive"];
 
@@ -69,10 +66,19 @@ impl CloudProvider for GDrive {
             }
         };
 
-        Ok(credentials)
+        self.drive = Some(Drive::new(&credentials));
+        Ok(())
+    }
+
+    fn sign_out(&mut self) -> Result<(), String> {
+        fs::remove_file("creds.json").map_err(|e| e.to_string())?;
+        self.drive = None;
+        Ok(())
     }
 
     fn read_dir(&mut self, path: &PathBuf) -> Result<Vec<FDir>, String> {
+        self.is_authenticated()?;
+
         let file_name = path.file_name().unwrap();
         let file_id = self
             .cache
@@ -84,6 +90,8 @@ impl CloudProvider for GDrive {
 
         let file_list = self
             .drive
+            .as_ref()
+            .unwrap()
             .files
             .list()
             .fields("files(name,id,mimeType,size,fullFileExtension,modifiedTime)")
@@ -117,6 +125,8 @@ impl CloudProvider for GDrive {
     }
 
     fn download_file(&self, path: &str) -> Result<String, String> {
+        self.is_authenticated()?;
+
         let slash_index = path.rfind('/').unwrap();
         let file_name = &path[slash_index + 1..];
 
@@ -127,6 +137,8 @@ impl CloudProvider for GDrive {
         dbg_log(format!("Downloading {} to {}", file_name, saved_path));
 
         self.drive
+            .as_ref()
+            .unwrap()
             .files
             .get_media(&id)
             .save_to(&saved_path)
@@ -137,8 +149,12 @@ impl CloudProvider for GDrive {
     }
 
     fn search_for(&self, fname: &str) -> Result<Vec<DirWalkerEntry>, String> {
+        self.is_authenticated()?;
+
         let file_list = self
             .drive
+            .as_ref()
+            .unwrap()
             .files
             .list()
             .fields("files(name,id,mimeType,size,fullFileExtension,modifiedTime)")
@@ -164,5 +180,15 @@ impl CloudProvider for GDrive {
         }
 
         Ok(search_result)
+    }
+}
+
+impl GDrive {
+    pub fn is_authenticated(&self) -> Result<(), String> {
+        if self.drive.is_none() {
+            return Err("Drive not authenticated".to_string());
+        }
+
+        Ok(())
     }
 }

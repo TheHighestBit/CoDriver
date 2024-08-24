@@ -149,7 +149,7 @@ fn main() {
             get_config_location,
             get_sshfs_mounts,
             unmount_network_drive,
-            is_gdrive_initialized
+            is_gdrive_authenticated
         ])
         .plugin(tauri_plugin_drag::init())
         .run(tauri::generate_context!())
@@ -2018,15 +2018,25 @@ async fn unmount_network_drive(path: String) {
 }
 
 #[tauri::command]
-async fn is_gdrive_initialized() -> bool {
-    GDRIVE.get().is_some()
+async fn is_gdrive_authenticated() -> bool {
+    get_gdrive()
+        .await
+        .unwrap()
+        .lock()
+        .await
+        .is_authenticated()
+        .is_ok()
 }
 
 async fn initialize_gdrive() -> Result<(), String> {
-    let gdrive = tauri::async_runtime::spawn_blocking(|| GDrive::new())
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
+    let gdrive = tauri::async_runtime::spawn_blocking(|| {
+        let mut gdrive_new = GDrive::new();
+        gdrive_new.authenticate()?;
+
+        Ok::<GDrive, String>(gdrive_new)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
     GDRIVE
         .set(Mutex::new(gdrive))
