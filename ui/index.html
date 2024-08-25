@@ -137,6 +137,7 @@
                         </div>
                     </div>
                     <br/>
+                    
                     <h3 class="settings-ui-headline">Shortcuts</h3>
                     <p>Configure up to 3 paths to switch to in an instant (Alt + 1, 2, 3)</p>
                     <input type="text" class="settings-ui-input text-input configured-path-one-input"
@@ -146,6 +147,7 @@
                     <input type="text" class="settings-ui-input text-input configured-path-three-input"
                         placeholder="/home/user/folder2" />
                     <br />
+                    
                     <h3 class="settings-ui-headline">Search settings</h3>
                     <p>Search depth (higher = slower) | Standard: 10</p>
                     <input style="width: 100px;" type="number" class="text-input settings-input number-input search-depth-input"
@@ -155,6 +157,15 @@
                         placeholder="0 = off" />
                     <p>Path to launch at start</p>
                     <input type="text" class="settings-ui-input text-input launch-path-input" placeholder="/home" />
+                    <br />
+                    
+                    <h3 class="settings-ui-headline">Cloud storage (Experimental)</h3>
+                    <span style="display: flex; gap: 10px; margin-top: 5px;">
+                        <input id="gdrive_enabled" type="checkbox"
+                               class="settings-ui-checkbox gdrive_enabled_checkbox" />
+                        <label for="gdrive_enabled">Google Drive</p></label>
+                    </span>
+                            
                     <br />
                     <h3 class="settings-ui-headline">Extra options</h3>
                     <span style="display: flex; gap: 10px; margin-top: 5px;">

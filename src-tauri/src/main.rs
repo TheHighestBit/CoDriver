@@ -198,6 +198,7 @@ struct AppConfig {
     is_select_mode: String,
     arr_favorites: Vec<String>,
     current_theme: String,
+    gdrive_enabled: String,
 }
 
 #[tauri::command]
@@ -264,6 +265,7 @@ async fn check_app_config() -> AppConfig {
             is_select_mode: "1".to_string(),
             arr_favorites: vec![],
             current_theme: "0".to_string(),
+            gdrive_enabled: "0".to_string(),
         };
         let _ = serde_json::to_writer_pretty(
             File::create(
@@ -325,6 +327,7 @@ async fn check_app_config() -> AppConfig {
             .map(|x| x.to_string().replace('"', ""))
             .collect(),
         current_theme: app_config["current_theme"].to_string().replace('"', ""),
+        gdrive_enabled: app_config["gdrive_enabled"].to_string().replace('"', ""),
     };
 }
 
@@ -1348,6 +1351,7 @@ async fn save_config(
     is_select_mode: String,
     arr_favorites: Vec<String>,
     current_theme: String,
+    is_gdrive_enabled: String,
 ) {
     let app_config_file = File::open(
         app_config_dir(&Config::default())
@@ -1373,6 +1377,7 @@ async fn save_config(
         is_select_mode: is_select_mode.replace("\\", "/"),
         arr_favorites,
         current_theme: current_theme.replace("\\", "/"),
+        gdrive_enabled: is_gdrive_enabled.replace("\\", "/"),
     };
     let config_dir = app_config_dir(&Config::default())
         .unwrap()

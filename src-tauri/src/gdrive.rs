@@ -1,5 +1,6 @@
 use crate::utils::{dbg_log, DirWalkerEntry};
 use crate::FDir;
+use chrono::{DateTime, Utc};
 use drive_v3::objects::File;
 use drive_v3::{Credentials, Drive};
 use std::collections::HashMap;
@@ -116,7 +117,14 @@ impl CloudProvider for GDrive {
                     is_dir: (file.mime_type.unwrap() == "application/vnd.google-apps.folder") as i8,
                     size: file.size.unwrap_or("0".to_string()),
                     extension: file.full_file_extension.unwrap_or("".to_string()),
-                    last_modified: file.modified_time.unwrap(),
+                    last_modified: {
+                        file.modified_time
+                            .unwrap()
+                            .parse::<DateTime<Utc>>()
+                            .unwrap()
+                            .format("%Y-%m-%d %H:%M:%S")
+                            .to_string()
+                    },
                 });
             }
         }

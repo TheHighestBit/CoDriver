@@ -107,6 +107,7 @@ let ArrSelectedItems = [];
 let ArrCopyItems = [];
 
 let IsImagePreview = false;
+let IsGdriveEnabled = false;
 let CurrentFtpPath = "";
 let IsCopyToCut = false;
 let Platform = "";
@@ -2117,6 +2118,18 @@ async function checkAppConfig() {
             document.querySelector(".image-preview-checkbox").checked = false;
         }
 
+        if (appConfig.gdrive_enabled.includes("1")) {
+            document.querySelector(".gdrive_enabled_checkbox").checked = true;
+            IsGDriveEnabled = true;
+            if (!document.querySelector(".gdrive-nav-button")) {
+                insertGdriveButton();
+            }
+        } else {
+            document.querySelector(".gdrive_enabled_checkbox").checked = false;
+            IsGDriveEnabled = false;
+            document.querySelector(".gdrive-nav-button").remove();
+        }
+
         // Theme options
         CurrentTheme = appConfig.current_theme;
         appConfig.themes = await invoke("get_themes");
@@ -3245,6 +3258,7 @@ async function saveConfig(isToReload = true, isVerbose = true) {
     let isSelectMode = (IsSelectMode = $("#choose-interaction-mode").is(
         ":checked",
     ));
+    let isGdriveEnabled = (IsGdriveEnabled = document.querySelector(".gdrive_enabled_checkbox").checked);
     let currentTheme = $(".theme-select").val();
 
     if (isOpenInTerminal == true) {
@@ -3272,6 +3286,11 @@ async function saveConfig(isToReload = true, isVerbose = true) {
     } else {
         isSelectMode = "0";
     }
+    if (isGdriveEnabled == true) {
+        isGdriveEnabled = "1";
+    } else {
+        isGdriveEnabled = "0";
+    }
 
     await invoke("save_config", {
         configuredPathOne,
@@ -3288,6 +3307,7 @@ async function saveConfig(isToReload = true, isVerbose = true) {
         isSelectMode,
         currentTheme,
         arrFavorites: ArrFavorites,
+        isGdriveEnabled,
     });
     if (isVerbose === true) {
         showToast("Settings have been saved", ToastType.INFO);
@@ -4087,18 +4107,7 @@ async function insertSiteNavButtons() {
     diskButton.innerHTML = `<i class="fa-solid fa-hard-drive"></i> Disks`;
     document.querySelector(".site-nav-bar").append(diskButton);
 
-    let gdriveButton = document.createElement("button");
-    gdriveButton.className = "site-nav-bar-button";
-    gdriveButton.onclick = async () => {
-        if (!await invoke("is_gdrive_authenticated")) {
-            showToast("Authenticating... If this is your first time, please authenticate in the browser", ToastType.INFO, 10000);
-        }
-
-        await openDirAndSwitch("gdrive:/");
-        showToast("Authenticated with Google Drive", ToastType.SUCCESS);
-    };
-    gdriveButton.innerHTML = `<i class="fa-brands fa-google-drive"></i> Google Drive`;
-    document.querySelector(".site-nav-bar").append(gdriveButton);
+    insertGdriveButton();
 
     if (sshfsMounts.length > 0) {
         let seperator2 = document.createElement("div");
@@ -4465,6 +4474,22 @@ function unmountNetworkDrive(networkDrive) {
     invoke("unmount_network_drive", {path: networkDrive.path}).then(() => {
         insertSiteNavButtons();
     });
+}
+
+function insertGdriveButton() {
+    let gdriveButton = document.createElement("button");
+    gdriveButton.className = "site-nav-bar-button gdrive-nav-button";
+    gdriveButton.onclick = async () => {
+        if (!await invoke("is_gdrive_authenticated")) {
+            showToast("Authenticating... If this is your first time, please authenticate in the browser", ToastType.INFO, 10000);
+        }
+
+        await openDirAndSwitch("gdrive:/");
+        showToast("Authenticated with Google Drive", ToastType.SUCCESS);
+    };
+
+    gdriveButton.innerHTML = `<i class="fa-brands fa-google-drive"></i> Google Drive`;
+    document.querySelector(".site-nav-bar").append(gdriveButton);
 }
 
 insertSiteNavButtons();
