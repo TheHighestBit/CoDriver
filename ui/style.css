@@ -1024,6 +1024,12 @@ button > svg {
     font-weight: bolder !important;
 }
 
+.icon-button--disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+    pointer-events: none;
+}
+
 .icon-button:hover {
     background-color: var(--transparentColorActive);
 }

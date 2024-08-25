@@ -2203,6 +2203,7 @@ async function checkAppConfig() {
         }
     });
     await unSelectAllItems();
+    invoke("is_gdrive_authenticated").then(() => document.querySelector(".logout_gdrive").classList.add("icon-button--disabled"));
     IsFirstRun = false;
 }
 
@@ -2312,7 +2313,7 @@ async function listDisks() {
 }
 
 async function listDirectories(fromDualPaneCopy = false) {
-    let lsItems = await invoke("list_dirs");
+    let lsItems = await invoke("list_dirs").catch((e) => showToast(e, ToastType.ERROR, 5000));
     if (IsDualPaneEnabled == true) {
         ViewMode = "column";
         if (fromDualPaneCopy == true) {
@@ -2935,7 +2936,7 @@ async function goToDir(directory) {
         } else {
             await showItems(items);
         }
-    });
+    }).catch((e) => showToast(e, ToastType.ERROR, 5000));
     await setCurrentDir(await getCurrentDir());
 }
 
@@ -2980,7 +2981,7 @@ async function searchFor(
             fileContent,
             appWindow,
             isQuickSearch
-        });
+        }).catch((e) => showToast(e, ToastType.ERROR, 5000));
         setTimeout(() => {
             ds.setSettings({
                 selectables: ArrDirectoryItems,
@@ -3131,7 +3132,7 @@ async function switchToDualPane() {
             await showItems(items, "left");
             await showItems(items, "right");
             goUp(false, true);
-        });
+        }).catch((e) => showToast(e, ToastType.ERROR, 5000));
         document.querySelector(".site-nav-bar").style.width = "0px";
         document.querySelector(".site-nav-bar").style.minWidth = "0";
         if (Platform == "darwin") {
@@ -4481,15 +4482,23 @@ function insertGdriveButton() {
     gdriveButton.className = "site-nav-bar-button gdrive-nav-button";
     gdriveButton.onclick = async () => {
         if (!await invoke("is_gdrive_authenticated")) {
-            showToast("Authenticating... If this is your first time, please authenticate in the browser", ToastType.INFO, 10000);
+            showToast("Authenticating...", ToastType.INFO, 10000);
         }
 
-        await openDirAndSwitch("gdrive:/");
-        showToast("Authenticated with Google Drive", ToastType.SUCCESS);
+        await openDirAndSwitch("gdrive:/").then(() => {
+            showToast("Authenticated with Google Drive", ToastType.SUCCESS);
+            document.querySelector(".logout_gdrive").classList.remove("icon-button--disabled");
+        });
     };
 
     gdriveButton.innerHTML = `<i class="fa-brands fa-google-drive"></i> Google Drive`;
     document.querySelector(".site-nav-bar").append(gdriveButton);
+}
+
+async function logoutGdrive() {
+    invoke("logout_gdrive")
+        .then(() => document.querySelector(".logout_gdrive").classList.add("icon-button--disabled"))
+        .catch((e) => showToast(e, ToastType.ERROR, 5000));
 }
 
 insertSiteNavButtons();

@@ -16,9 +16,9 @@ pub trait CloudProvider {
 
     fn read_dir(&mut self, path: &PathBuf) -> Result<Vec<FDir>, String>;
 
-    fn download_file(&self, path: &str) -> Result<String, String>;
+    fn download_file(&mut self, path: &str) -> Result<String, String>;
 
-    fn search_for(&self, fname: &str) -> Result<Vec<DirWalkerEntry>, String>;
+    fn search_for(&mut self, fname: &str) -> Result<Vec<DirWalkerEntry>, String>;
 }
 
 pub struct GDrive {
@@ -28,13 +28,9 @@ pub struct GDrive {
 
 impl CloudProvider for GDrive {
     fn new() -> Self {
-        let mut root_file = File::new();
-        root_file.name = Some("gdrive:".to_string());
-        root_file.id = Some("root".to_string());
-
         GDrive {
             drive: None,
-            cache: HashMap::from([("gdrive:".to_string(), root_file)]),
+            cache: HashMap::from([("gdrive:".to_string(), GDrive::construct_root_file())]),
         }
     }
 
@@ -68,6 +64,10 @@ impl CloudProvider for GDrive {
         };
 
         self.drive = Some(Drive::new(&credentials));
+        self.cache.clear();
+        self.cache
+            .insert("gdrive:".to_string(), GDrive::construct_root_file());
+
         Ok(())
     }
 
@@ -78,7 +78,9 @@ impl CloudProvider for GDrive {
     }
 
     fn read_dir(&mut self, path: &PathBuf) -> Result<Vec<FDir>, String> {
-        self.is_authenticated()?;
+        if self.drive.is_none() {
+            self.authenticate()?;
+        }
 
         let file_name = path.file_name().unwrap();
         let file_id = self
@@ -132,8 +134,10 @@ impl CloudProvider for GDrive {
         Ok(files_fdir)
     }
 
-    fn download_file(&self, path: &str) -> Result<String, String> {
-        self.is_authenticated()?;
+    fn download_file(&mut self, path: &str) -> Result<String, String> {
+        if self.drive.is_none() {
+            self.authenticate()?;
+        }
 
         let slash_index = path.rfind('/').unwrap();
         let file_name = &path[slash_index + 1..];
@@ -156,8 +160,10 @@ impl CloudProvider for GDrive {
         Ok(saved_path)
     }
 
-    fn search_for(&self, fname: &str) -> Result<Vec<DirWalkerEntry>, String> {
-        self.is_authenticated()?;
+    fn search_for(&mut self, fname: &str) -> Result<Vec<DirWalkerEntry>, String> {
+        if self.drive.is_none() {
+            self.authenticate()?;
+        }
 
         let file_list = self
             .drive
@@ -198,5 +204,13 @@ impl GDrive {
         }
 
         Ok(())
+    }
+
+    fn construct_root_file() -> File {
+        let mut root_file = File::new();
+        root_file.name = Some("gdrive:".to_string());
+        root_file.id = Some("root".to_string());
+
+        root_file
     }
 }

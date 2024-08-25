@@ -149,7 +149,8 @@ fn main() {
             get_config_location,
             get_sshfs_mounts,
             unmount_network_drive,
-            is_gdrive_authenticated
+            is_gdrive_authenticated,
+            logout_gdrive,
         ])
         .plugin(tauri_plugin_drag::init())
         .run(tauri::generate_context!())
@@ -1121,7 +1122,7 @@ async fn extract_item(from_path: String, app_window: Window) {
 async fn open_item(path: String) -> Result<(), String> {
     dbg_log(format!("Opening: {}", &path));
     if path.starts_with("gdrive:/") {
-        let gdrive = get_gdrive().await?.lock().await;
+        let mut gdrive = get_gdrive().await?.lock().await;
 
         let temp_path = tauri::async_runtime::spawn_blocking(move || gdrive.download_file(&path))
             .await
@@ -2024,13 +2025,25 @@ async fn unmount_network_drive(path: String) {
 
 #[tauri::command]
 async fn is_gdrive_authenticated() -> bool {
-    get_gdrive()
+    GDRIVE.get().is_some()
+        && get_gdrive()
+            .await
+            .unwrap()
+            .lock()
+            .await
+            .is_authenticated()
+            .is_ok()
+}
+
+#[tauri::command]
+async fn logout_gdrive() -> Result<(), String> {
+    let mut gdrive = get_gdrive().await?.lock().await;
+
+    tauri::async_runtime::spawn_blocking(move || gdrive.sign_out())
         .await
-        .unwrap()
-        .lock()
-        .await
-        .is_authenticated()
-        .is_ok()
+        .unwrap()?;
+
+    Ok(())
 }
 
 async fn initialize_gdrive() -> Result<(), String> {
