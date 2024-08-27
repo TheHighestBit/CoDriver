@@ -99,7 +99,7 @@ impl CloudProvider for GDrive {
             .unwrap()
             .files
             .list()
-            .fields("files(name,id,mimeType,size,fullFileExtension,modifiedTime,parents)")
+            .fields("files(name,id,mimeType,size,fileExtension,modifiedTime,parents)")
             .q(&format!("'{}' in parents", file_id))
             .execute()
             .map_err(|e| e.to_string())?;
@@ -120,7 +120,7 @@ impl CloudProvider for GDrive {
                         .replace("\\", "/"),
                     is_dir: (file.mime_type.unwrap() == "application/vnd.google-apps.folder") as i8,
                     size: file.size.unwrap_or("0".to_string()),
-                    extension: file.full_file_extension.unwrap_or("".to_string()),
+                    extension: format!(".{}", file.file_extension.unwrap_or("".to_string())),
                     last_modified: {
                         file.modified_time
                             .unwrap()
@@ -248,13 +248,13 @@ impl GDrive {
         if file.mime_type.as_ref().unwrap() == "application/vnd.google-apps.folder" {
             let mut size = 0;
 
-            let mut children = self
+            let children = self
                 .drive
                 .as_ref()
                 .unwrap()
                 .files
                 .list()
-                .fields("files(name,id,mimeType,size,fullFileExtension,modifiedTime,parents)")
+                .fields("files(id,size,mimeType)")
                 .q(&format!("'{}' in parents", file.id.as_ref().unwrap()))
                 .execute()
                 .unwrap()

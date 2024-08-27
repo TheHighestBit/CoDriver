@@ -840,6 +840,10 @@ async function showItems(items, dualPaneSide = "", millerCol = 1) {
         itemLink.setAttribute("id", "item-link");
         itemLink.setAttribute("itemformillercol", parseInt(millerCol) + 1);
 
+        let IsImagePreviewBefore = IsImagePreview;
+        if (item.path.startsWith("gdrive:")) {
+            IsImagePreview = false;
+        }
         let newRow = document.createElement("div");
         newRow.className = "directory-item-entry";
         let fileIcon = "resources/file-icon.png"; // Default
@@ -1032,6 +1036,11 @@ async function showItems(items, dualPaneSide = "", millerCol = 1) {
                     break;
             }
         }
+
+        if (item.path.startsWith("gdrive:")) {
+            IsImagePreview = IsImagePreviewBefore;
+        }
+
         itemLink.className = "item-link directory-entry";
         if (ViewMode == "wrap") {
             var itemButton = document.createElement("div");
