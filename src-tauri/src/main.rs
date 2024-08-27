@@ -1884,11 +1884,19 @@ async fn get_simple_dir_info(
     path: String,
     app_window: Window,
     class_to_fill: String,
-) -> SimpleDirInfo {
+) -> Result<SimpleDirInfo, String> {
+    if path.starts_with("gdrive:/") {
+        let gdrive = get_gdrive().await?.lock().await;
+
+        return tauri::async_runtime::spawn_blocking(move || gdrive.get_item_size(&path))
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
     unsafe {
         CALCED_SIZE = 0;
     }
-    dir_info(path, &app_window, class_to_fill)
+    Ok(dir_info(path, &app_window, class_to_fill))
 }
 
 #[derive(Debug, Serialize)]

@@ -1,5 +1,5 @@
 use crate::utils::{dbg_log, DirWalkerEntry};
-use crate::FDir;
+use crate::{FDir, SimpleDirInfo};
 use chrono::{DateTime, Utc};
 use drive_v3::objects::File;
 use drive_v3::{Credentials, Drive};
@@ -19,6 +19,8 @@ pub trait CloudProvider {
     fn download_file(&mut self, path: &str) -> Result<String, String>;
 
     fn search_for(&mut self, fname: &str) -> Result<Vec<DirWalkerEntry>, String>;
+
+    fn get_item_size(&self, path: &str) -> Result<SimpleDirInfo, String>;
 }
 
 pub struct GDrive {
@@ -97,7 +99,7 @@ impl CloudProvider for GDrive {
             .unwrap()
             .files
             .list()
-            .fields("files(name,id,mimeType,size,fullFileExtension,modifiedTime)")
+            .fields("files(name,id,mimeType,size,fullFileExtension,modifiedTime,parents)")
             .q(&format!("'{}' in parents", file_id))
             .execute()
             .map_err(|e| e.to_string())?;
@@ -179,6 +181,8 @@ impl CloudProvider for GDrive {
         let mut search_result = Vec::new();
         if let Some(files) = file_list.files {
             for file in files {
+                self.cache.insert(file.name.clone().unwrap(), file.clone());
+
                 let is_file = file.mime_type.unwrap() != "application/vnd.google-apps.folder";
                 search_result.push(DirWalkerEntry {
                     name: file.name.clone().unwrap(),
@@ -194,6 +198,31 @@ impl CloudProvider for GDrive {
         }
 
         Ok(search_result)
+    }
+
+    fn get_item_size(&self, path: &str) -> Result<SimpleDirInfo, String> {
+        let item_name = path.rsplit('/').next().ok_or("invalid path")?;
+        let cached_item = self.cache.get(item_name).ok_or("item not in cache")?;
+
+        if cached_item.mime_type.as_ref().unwrap() == "application/vnd.google-apps.folder" {
+            let mut total_items: u64 = 0;
+            let size = self.calc_size(cached_item, &mut total_items);
+
+            Ok(SimpleDirInfo {
+                size,
+                count_elements: total_items,
+            })
+        } else {
+            Ok(SimpleDirInfo {
+                size: cached_item
+                    .size
+                    .as_ref()
+                    .unwrap_or(&"0".to_string())
+                    .parse()
+                    .unwrap(),
+                count_elements: 1,
+            })
+        }
     }
 }
 
@@ -212,5 +241,33 @@ impl GDrive {
         root_file.id = Some("root".to_string());
 
         root_file
+    }
+
+    fn calc_size(&self, file: &File, total_items: &mut u64) -> u64 {
+        *total_items += 1;
+        if file.mime_type.as_ref().unwrap() == "application/vnd.google-apps.folder" {
+            let mut size = 0;
+
+            let mut children = self
+                .drive
+                .as_ref()
+                .unwrap()
+                .files
+                .list()
+                .fields("files(name,id,mimeType,size,fullFileExtension,modifiedTime,parents)")
+                .q(&format!("'{}' in parents", file.id.as_ref().unwrap()))
+                .execute()
+                .unwrap()
+                .files
+                .unwrap();
+
+            for child in children {
+                size += self.calc_size(&child, total_items);
+            }
+
+            size
+        } else {
+            file.size.as_ref().unwrap().parse().unwrap()
+        }
     }
 }
