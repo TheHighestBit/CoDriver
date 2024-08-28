@@ -21,18 +21,25 @@ pub trait CloudProvider {
     fn search_for(&mut self, fname: &str) -> Result<Vec<DirWalkerEntry>, String>;
 
     fn get_item_size(&self, path: &str) -> Result<SimpleDirInfo, String>;
+
+    fn copy_paste(
+        &mut self,
+        arr_items: Vec<FDir>,
+        copy_to_path: &str,
+        current_dir: &str,
+    ) -> Result<(), String>;
 }
 
 pub struct GDrive {
     drive: Option<Drive>,
-    cache: HashMap<String, File>,
+    path2file: HashMap<String, File>,
 }
 
 impl CloudProvider for GDrive {
     fn new() -> Self {
         GDrive {
             drive: None,
-            cache: HashMap::from([("gdrive:".to_string(), GDrive::construct_root_file())]),
+            path2file: HashMap::from([("gdrive:".to_string(), GDrive::construct_root_file())]),
         }
     }
 
@@ -66,8 +73,8 @@ impl CloudProvider for GDrive {
         };
 
         self.drive = Some(Drive::new(&credentials));
-        self.cache.clear();
-        self.cache
+        self.path2file.clear();
+        self.path2file
             .insert("gdrive:".to_string(), GDrive::construct_root_file());
 
         Ok(())
@@ -84,10 +91,9 @@ impl CloudProvider for GDrive {
             self.authenticate()?;
         }
 
-        let file_name = path.file_name().unwrap();
         let file_id = self
-            .cache
-            .get(file_name.to_str().unwrap())
+            .path2file
+            .get(path.to_str().unwrap())
             .unwrap()
             .id
             .clone()
@@ -108,7 +114,10 @@ impl CloudProvider for GDrive {
         if let Some(files) = file_list.files {
             for file in files {
                 let file_name = file.name.clone().unwrap();
-                self.cache.insert(file_name.clone(), file.clone());
+                self.path2file.insert(
+                    format!("{}/{}", path.to_str().unwrap(), file_name),
+                    file.clone(),
+                );
 
                 files_fdir.push(FDir {
                     name: file_name.clone(),
@@ -141,14 +150,12 @@ impl CloudProvider for GDrive {
             self.authenticate()?;
         }
 
-        let slash_index = path.rfind('/').unwrap();
-        let file_name = &path[slash_index + 1..];
-
-        let cached_file = self.cache.get(file_name).unwrap();
+        let cached_file = self.path2file.get(path).unwrap();
         let id = cached_file.id.clone().unwrap();
-        let saved_path = format!("{}{}", std::env::temp_dir().to_str().unwrap(), file_name);
+        let fname = cached_file.name.as_ref().unwrap();
+        let saved_path = format!("{}{}", std::env::temp_dir().to_str().unwrap(), fname);
 
-        dbg_log(format!("Downloading {} to {}", file_name, saved_path));
+        dbg_log(format!("Downloading {} to {}", fname, saved_path));
 
         self.drive
             .as_ref()
@@ -181,8 +188,6 @@ impl CloudProvider for GDrive {
         let mut search_result = Vec::new();
         if let Some(files) = file_list.files {
             for file in files {
-                self.cache.insert(file.name.clone().unwrap(), file.clone());
-
                 let is_file = file.mime_type.unwrap() != "application/vnd.google-apps.folder";
                 search_result.push(DirWalkerEntry {
                     name: file.name.clone().unwrap(),
@@ -201,8 +206,7 @@ impl CloudProvider for GDrive {
     }
 
     fn get_item_size(&self, path: &str) -> Result<SimpleDirInfo, String> {
-        let item_name = path.rsplit('/').next().ok_or("invalid path")?;
-        let cached_item = self.cache.get(item_name).ok_or("item not in cache")?;
+        let cached_item = self.path2file.get(path).ok_or("item not in cache")?;
 
         if cached_item.mime_type.as_ref().unwrap() == "application/vnd.google-apps.folder" {
             let mut total_items: u64 = 0;
@@ -223,6 +227,32 @@ impl CloudProvider for GDrive {
                 count_elements: 1,
             })
         }
+    }
+
+    fn copy_paste(
+        &mut self,
+        arr_items: Vec<FDir>,
+        copy_to_path: &str,
+        current_dir: &str,
+    ) -> Result<(), String> {
+        if self.drive.is_none() {
+            self.authenticate()?;
+        }
+
+        if copy_to_path.starts_with("gdrive:") {
+            if current_dir.starts_with("gdrive:") {
+                // Gdrive to Gdrive copy
+                todo!();
+            } else {
+                // Local to Gdrive copy
+                todo!();
+            }
+        } else {
+            // Gdrive to Local copy
+            todo!();
+        }
+
+        Ok(())
     }
 }
 

@@ -2503,7 +2503,7 @@ async function openItem(element, dualPaneSide, shortcutDirPath = null) {
                 return;
             }
         } else if (IsItemPreviewOpen == false) {
-            if (path.startsWith("gdrive:/")) {
+            if (path.startsWith("gdrive:")) {
                 showToast("Downloading file into a temporary directory...", ToastType.INFO, 3000);
             }
             await invoke("open_item", {path}).catch((e) => {
@@ -4494,7 +4494,7 @@ function insertGdriveButton() {
             showToast("Authenticating...", ToastType.INFO, 10000);
         }
 
-        await openDirAndSwitch("gdrive:/").then(() => {
+        await openDirAndSwitch("gdrive:").then(() => {
             showToast("Authenticated with Google Drive", ToastType.SUCCESS);
             document.querySelector(".logout_gdrive").classList.remove("icon-button--disabled");
         });

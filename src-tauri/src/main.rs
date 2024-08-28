@@ -498,7 +498,7 @@ async fn get_current_dir() -> String {
 async fn set_dir(current_dir: String) -> bool {
     dbg_log(format!("Current dir: {}", &current_dir));
 
-    if !current_dir.starts_with("gdrive:/") {
+    if !current_dir.starts_with("gdrive:") {
         if fs::metadata(&current_dir).is_err() {
             return false;
         }
@@ -514,7 +514,7 @@ async fn set_dir(current_dir: String) -> bool {
 async fn list_dirs() -> Result<Vec<FDir>, String> {
     let current_dir = CURRENT_DIR.lock().await.clone();
 
-    if current_dir.starts_with("gdrive:/") {
+    if current_dir.starts_with("gdrive:") {
         let mut gdrive = get_gdrive().await?.lock().await;
         return tauri::async_runtime::spawn_blocking(move || gdrive.read_dir(&current_dir))
             .await
@@ -566,7 +566,7 @@ async fn list_dirs() -> Result<Vec<FDir>, String> {
 async fn open_dir(path: String) -> bool {
     dbg_log(format!("Opening dir: {}", &path));
 
-    if !path.starts_with("gdrive:/") {
+    if !path.starts_with("gdrive:") {
         if read_dir(&path).is_err() {
             return false;
         }
@@ -772,7 +772,7 @@ async fn search_for(
     let sw = Stopwatch::start_new();
 
     let current_dir = CURRENT_DIR.lock().await.clone();
-    if current_dir.starts_with("gdrive:/") {
+    if current_dir.starts_with("gdrive:") {
         let mut gdrive = get_gdrive().await?.lock().await;
 
         let search_result =
@@ -897,11 +897,24 @@ async fn arr_copy_paste(
     arr_items: Vec<FDir>,
     is_for_dual_pane: String,
     mut copy_to_path: String,
-) {
+) -> Result<(), String> {
+    let current_path = CURRENT_DIR.lock().await.to_string_lossy().to_string();
     if &copy_to_path.len() == &0 {
         wng_log("No destination path provided. Defaulting to current dir".into());
-        copy_to_path = CURRENT_DIR.lock().await.to_string_lossy().to_string();
+        copy_to_path = current_path.clone();
     }
+
+    if copy_to_path.starts_with("gdrive:") || current_path.starts_with("gdrive:") {
+        let mut gdrive = get_gdrive().await?.lock().await;
+        let to_path_clone = copy_to_path.clone();
+
+        return tauri::async_runtime::spawn_blocking(move || {
+            gdrive.copy_paste(arr_items, &to_path_clone, &current_path)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+
     unsafe {
         COPY_COUNTER = 0.0;
         TO_COPY_COUNTER = 0.0
@@ -949,6 +962,8 @@ async fn arr_copy_paste(
     dbg_log(format!("Copy-Paste time: {:?}", sw.elapsed()));
     app_window.eval("resetProgressBar()").unwrap();
     // app_window.eval("listDirectories(true)").unwrap();
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -1121,7 +1136,7 @@ async fn extract_item(from_path: String, app_window: Window) {
 #[tauri::command]
 async fn open_item(path: String) -> Result<(), String> {
     dbg_log(format!("Opening: {}", &path));
-    if path.starts_with("gdrive:/") {
+    if path.starts_with("gdrive:") {
         let mut gdrive = get_gdrive().await?.lock().await;
 
         let temp_path = tauri::async_runtime::spawn_blocking(move || gdrive.download_file(&path))
@@ -1885,7 +1900,7 @@ async fn get_simple_dir_info(
     app_window: Window,
     class_to_fill: String,
 ) -> Result<SimpleDirInfo, String> {
-    if path.starts_with("gdrive:/") {
+    if path.starts_with("gdrive:") {
         let gdrive = get_gdrive().await?.lock().await;
 
         return tauri::async_runtime::spawn_blocking(move || gdrive.get_item_size(&path))
