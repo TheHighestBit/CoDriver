@@ -845,11 +845,22 @@ async fn copy_paste(
     from_path: String,
     is_for_dual_pane: String,
     mut copy_to_path: String,
-) {
+) -> Result<(), String> {
     if copy_to_path.clone().len() == 0 {
         wng_log("No destination path provided. Defaulting to current dir".into());
         copy_to_path = CURRENT_DIR.lock().await.to_string_lossy().to_string();
     }
+
+    if copy_to_path.starts_with("gdrive:") || from_path.starts_with("gdrive:") {
+        let mut gdrive = get_gdrive().await?.lock().await;
+
+        return tauri::async_runtime::spawn_blocking(move || {
+            gdrive.copy(&from_path, &copy_to_path)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+
     unsafe {
         COPY_COUNTER = 0.0;
     }
@@ -889,6 +900,8 @@ async fn copy_paste(
 
     dbg_log(format!("Copy-Paste time: {:?}", sw.elapsed()));
     app_window.eval("resetProgressBar()").unwrap();
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -904,12 +917,16 @@ async fn arr_copy_paste(
         copy_to_path = current_path.clone();
     }
 
-    if copy_to_path.starts_with("gdrive:") || current_path.starts_with("gdrive:") {
+    if copy_to_path.starts_with("gdrive:")
+        || arr_items
+            .iter()
+            .any(|item| item.path.starts_with("gdrive:"))
+    {
         let mut gdrive = get_gdrive().await?.lock().await;
         let to_path_clone = copy_to_path.clone();
 
         return tauri::async_runtime::spawn_blocking(move || {
-            gdrive.copy_paste(arr_items, &to_path_clone, &current_path)
+            gdrive.copy_items(arr_items, &to_path_clone)
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -1139,9 +1156,11 @@ async fn open_item(path: String) -> Result<(), String> {
     if path.starts_with("gdrive:") {
         let mut gdrive = get_gdrive().await?.lock().await;
 
-        let temp_path = tauri::async_runtime::spawn_blocking(move || gdrive.download_file(&path))
-            .await
-            .map_err(|e| e.to_string())?;
+        let temp_path = tauri::async_runtime::spawn_blocking(move || {
+            gdrive.download_file(&path, std::env::temp_dir().to_str().unwrap())
+        })
+        .await
+        .map_err(|e| e.to_string())?;
 
         open::that_detached(temp_path?).unwrap();
     } else {
