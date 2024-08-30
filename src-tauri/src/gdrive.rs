@@ -1,7 +1,7 @@
 use crate::utils::{dbg_log, DirWalkerEntry};
 use crate::{FDir, SimpleDirInfo};
 use chrono::{DateTime, Utc};
-use drive_v3::objects::File;
+use drive_v3::objects::{File, UploadType};
 use drive_v3::{Credentials, Drive};
 use std::collections::HashMap;
 use std::fs;
@@ -16,9 +16,13 @@ pub trait CloudProvider {
 
     fn read_dir(&mut self, path: &PathBuf) -> Result<Vec<FDir>, String>;
 
-    fn download_file(&mut self, from_path: &str, to_path: &str) -> Result<String, String>;
+    fn download(&mut self, from_path: &str, to_path: &str) -> Result<String, String>;
 
-    fn search_for(&mut self, fname: &str) -> Result<Vec<DirWalkerEntry>, String>;
+    fn upload(&mut self, from_path: &str, to_path: &str) -> Result<(), String>;
+
+    fn create_dir(&mut self, from_path: &str, to_path: &str) -> Result<(), String>;
+
+    fn search(&mut self, fname: &str) -> Result<Vec<DirWalkerEntry>, String>;
 
     fn get_item_size(&self, path: &str) -> Result<SimpleDirInfo, String>;
 
@@ -140,7 +144,7 @@ impl CloudProvider for GDrive {
         Ok(files_fdir)
     }
 
-    fn download_file(&mut self, from_path: &str, to_path: &str) -> Result<String, String> {
+    fn download(&mut self, from_path: &str, to_path: &str) -> Result<String, String> {
         if self.drive.is_none() {
             self.authenticate()?;
         }
@@ -149,8 +153,6 @@ impl CloudProvider for GDrive {
         let id = cached_file.id.clone().unwrap();
         let fname = cached_file.name.as_ref().unwrap();
         let saved_path = format!("{}{}", to_path, fname);
-
-        dbg_log(format!("Downloading {} to {}", fname, saved_path));
 
         self.drive
             .as_ref()
@@ -164,7 +166,142 @@ impl CloudProvider for GDrive {
         Ok(saved_path)
     }
 
-    fn search_for(&mut self, fname: &str) -> Result<Vec<DirWalkerEntry>, String> {
+    fn upload(&mut self, from_path: &str, to_path: &str) -> Result<(), String> {
+        if fs::metadata(from_path).unwrap().is_dir() {
+            self.create_dir(from_path, to_path)?;
+
+            let children = fs::read_dir(from_path)
+                .map_err(|e| e.to_string())?
+                .map(|entry| entry.unwrap().path())
+                .collect::<Vec<_>>();
+
+            for child_path in children
+                .iter()
+                .filter(|p| fs::metadata(p).unwrap().is_dir())
+            {
+                let child_path_str = child_path.to_str().unwrap().replace("\\", "/");
+                let new_to_path = format!("{}/{}", to_path, from_path.split('/').last().unwrap());
+
+                self.upload(&child_path_str, &new_to_path)?;
+            }
+
+            for child_path in children
+                .iter()
+                .filter(|p| fs::metadata(p).unwrap().is_file())
+            {
+                let child_path_str = child_path.to_str().unwrap().replace("\\", "/");
+                let new_to_path = format!("{}/{}", to_path, from_path.split('/').last().unwrap());
+
+                self.upload(&child_path_str, &new_to_path)?;
+            }
+
+            return Ok(());
+        }
+
+        if self.drive.is_none() {
+            self.authenticate()?;
+        }
+
+        let md = File {
+            name: Some(from_path.split('/').last().unwrap().to_string()),
+            parents: Some(vec![self
+                .path2file
+                .get(to_path)
+                .unwrap()
+                .id
+                .clone()
+                .unwrap()]),
+            ..Default::default()
+        };
+
+        let new_file = if fs::metadata(from_path).unwrap().len() > 5 * 1024 * 1024 {
+            dbg_log(format!(
+                "Starting resumable upload of {} to {}",
+                from_path, to_path
+            ));
+
+            self.drive
+                .as_ref()
+                .unwrap()
+                .files
+                .create()
+                .upload_type(UploadType::Resumable)
+                .callback(|total_bytes, uploaded_bytes| {
+                    println!(
+                        "Uploaded {} bytes, out of a total of {}.",
+                        uploaded_bytes, total_bytes
+                    );
+                })
+                .metadata(md)
+                .content_source(from_path)
+                .execute()
+                .map_err(|e| e.to_string())?
+        } else {
+            dbg_log(format!(
+                "Starting standard upload of {} to {}",
+                from_path, to_path
+            ));
+
+            self.drive
+                .as_ref()
+                .unwrap()
+                .files
+                .create()
+                .upload_type(UploadType::Multipart)
+                .metadata(md)
+                .content_source(from_path)
+                .execute()
+                .map_err(|e| e.to_string())?
+        };
+
+        self.path2file.insert(
+            format!("{}/{}", to_path, new_file.name.as_ref().unwrap()),
+            new_file,
+        );
+
+        Ok(())
+    }
+
+    fn create_dir(&mut self, from_path: &str, to_path: &str) -> Result<(), String> {
+        if self.drive.is_none() {
+            self.authenticate()?;
+        }
+
+        let dir_name = from_path.split('/').last().unwrap();
+
+        dbg_log(format!("Creating directory {}/{}", to_path, &dir_name,));
+
+        let md = File {
+            name: Some(dir_name.to_string()),
+            parents: Some(vec![self
+                .path2file
+                .get(to_path)
+                .unwrap()
+                .id
+                .clone()
+                .unwrap()]),
+            mime_type: Some("application/vnd.google-apps.folder".to_string()),
+            ..Default::default()
+        };
+
+        let new_dir = self
+            .drive
+            .as_ref()
+            .unwrap()
+            .files
+            .create()
+            .upload_type(UploadType::Multipart)
+            .metadata(md)
+            .execute()
+            .map_err(|e| e.to_string())?;
+
+        self.path2file
+            .insert(format!("{}/{}", to_path, &dir_name), new_dir);
+
+        Ok(())
+    }
+
+    fn search(&mut self, fname: &str) -> Result<Vec<DirWalkerEntry>, String> {
         if self.drive.is_none() {
             self.authenticate()?;
         }
@@ -183,10 +320,13 @@ impl CloudProvider for GDrive {
         let mut search_result = Vec::new();
         if let Some(files) = file_list.files {
             for file in files {
+                let file_path = format!("gdrive:/{}", file.name.clone().unwrap());
+                self.path2file.insert(file_path.clone(), file.clone());
+
                 let is_file = !GDrive::is_dir(&file);
                 search_result.push(DirWalkerEntry {
                     name: file.name.clone().unwrap(),
-                    path: file.name.clone().unwrap(),
+                    path: file_path,
                     depth: 0,
                     is_dir: !is_file,
                     is_file,
@@ -293,11 +433,10 @@ impl GDrive {
                 todo!();
             } else {
                 // Local to Gdrive copy
-                todo!();
+                self.upload(from, to)?;
             }
         } else {
             // Gdrive to Local copy
-            // TODO figure out how to enable this for search items since they are not in the cache with the full path
             let item = self.path2file.get(from).ok_or("item not in cache")?;
             let item_name = item.name.clone().unwrap();
 
@@ -310,7 +449,7 @@ impl GDrive {
 
                 self.copy_items(children, format!("{}/{}", to, item_name).as_str())?;
             } else {
-                self.download_file(from, &format!("{to}/"))?;
+                self.download(from, &format!("{}/", to))?;
             }
         }
 

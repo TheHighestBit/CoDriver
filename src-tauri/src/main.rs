@@ -775,10 +775,9 @@ async fn search_for(
     if current_dir.starts_with("gdrive:") {
         let mut gdrive = get_gdrive().await?.lock().await;
 
-        let search_result =
-            tauri::async_runtime::spawn_blocking(move || gdrive.search_for(&file_name))
-                .await
-                .map_err(|e| e.to_string())?;
+        let search_result = tauri::async_runtime::spawn_blocking(move || gdrive.search(&file_name))
+            .await
+            .map_err(|e| e.to_string())?;
 
         for item in search_result? {
             unsafe {
@@ -1157,7 +1156,7 @@ async fn open_item(path: String) -> Result<(), String> {
         let mut gdrive = get_gdrive().await?.lock().await;
 
         let temp_path = tauri::async_runtime::spawn_blocking(move || {
-            gdrive.download_file(&path, std::env::temp_dir().to_str().unwrap())
+            gdrive.download(&path, std::env::temp_dir().to_str().unwrap())
         })
         .await
         .map_err(|e| e.to_string())?;
