@@ -27,6 +27,8 @@ pub trait CloudProvider {
     fn get_item_size(&self, path: &str) -> Result<SimpleDirInfo, String>;
 
     fn copy_items(&mut self, arr_items: Vec<FDir>, copy_to_path: &str) -> Result<(), String>;
+
+    fn delete(&mut self, path: &str) -> Result<(), String>;
 }
 
 pub struct GDrive {
@@ -377,6 +379,26 @@ impl CloudProvider for GDrive {
         for item in arr_items {
             self.copy(&item.path, copy_to_path)?;
         }
+
+        Ok(())
+    }
+
+    fn delete(&mut self, path: &str) -> Result<(), String> {
+        let item = self.path2file.get_mut(path).ok_or("item not in cache")?;
+        let md = File {
+            trashed: Some(true),
+            ..Default::default()
+        };
+
+        self.drive
+            .as_ref()
+            .unwrap()
+            .files
+            .update(item.id.as_ref().unwrap())
+            .upload_type(UploadType::Multipart)
+            .metadata(md)
+            .execute()
+            .map_err(|e| e.to_string())?;
 
         Ok(())
     }

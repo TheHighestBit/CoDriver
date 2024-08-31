@@ -1622,7 +1622,7 @@ async function deleteItems() {
         createNewAction(actionId, "Deleting", "Delete Items", "Delete Items");
         for (let i = 0; i < arr.length; i++) {
             let actFileName = arr[i];
-            await invoke("delete_item", {actFileName});
+            await invoke("delete_item", {actFileName}).catch((e) => showToast(e, ToastType.ERROR, 5000));
         }
         IsCopyToCut = false;
         await listDirectories();
@@ -1869,7 +1869,7 @@ async function itemMoveTo(isForDualPane = false) {
         }).then(async () => {
             await invoke("arr_delete_items", {
                 arrItems: ArrSelectedItems.map((item) => item.getAttribute("itempath")),
-            });
+            }).catch((e) => showToast(e, ToastType.ERROR, 5000));
             if (isForDualPane) {
                 refreshBothViews(SelectedItemPaneSide);
             } else {
@@ -1927,7 +1927,7 @@ async function pasteItem(copyToPath = "") {
     if (IsCopyToCut == true) {
         await invoke("arr_delete_items", {
             arrItems: arr.map((element) => element.path),
-        });
+        }).catch((e) => showToast(e, ToastType.ERROR, 5000));
         ArrCopyItems = [];
         if (IsDualPaneEnabled === true) {
             refreshBothViews(SelectedItemPaneSide);
@@ -3980,7 +3980,7 @@ async function showExtraContextMenu(e, item) {
             }
             item.remove();
             contextMenu.remove();
-            await invoke("arr_delete_items", {arrItems: excessItems});
+            await invoke("arr_delete_items", {arrItems: excessItems}).catch((e) => showToast(e, ToastType.ERROR, 5000));
         };
         contextMenu.append(cButton);
     }

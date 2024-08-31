@@ -1041,17 +1041,27 @@ async fn get_final_filename(
 }
 
 #[tauri::command]
-async fn delete_item(act_file_name: String) {
+async fn delete_item(act_file_name: String) -> Result<(), String> {
     dbg_log(format!("Deleting: {}", String::from(&act_file_name)));
 
+    if act_file_name.starts_with("gdrive:") {
+        let mut gdrive = get_gdrive().await?.lock().await;
+        let _ = tauri::async_runtime::spawn_blocking(move || gdrive.delete(&act_file_name))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        return Ok(());
+    }
+
     #[cfg(target_os = "windows")]
-    let dir_remove = remove_dir_all(&act_file_name.replace("\\", "/"));
-    #[cfg(target_os = "windows")]
-    if dir_remove.is_err() {
-        let _ = delete_file(&act_file_name.replace("\\", "/")).expect("Failed to delete file");
-        return;
-    } else {
-        return;
+    {
+        let dir_remove = remove_dir_all(&act_file_name.replace("\\", "/"));
+
+        if dir_remove.is_err() {
+            let _ = delete_file(&act_file_name.replace("\\", "/")).expect("Failed to delete file");
+        }
+
+        return Ok(());
     }
 
     let file = File::open(&act_file_name);
@@ -1066,13 +1076,17 @@ async fn delete_item(act_file_name: String) {
     } else {
         let _ = delete_file(&act_file_name.replace("\\", "/")).expect("Failed to delete file");
     }
+
+    Ok(())
 }
 
 #[tauri::command]
-async fn arr_delete_items(arr_items: Vec<String>) {
+async fn arr_delete_items(arr_items: Vec<String>) -> Result<(), String> {
     for path in arr_items {
-        delete_item(path).await;
+        delete_item(path).await?;
     }
+
+    Ok(())
 }
 
 #[tauri::command]
