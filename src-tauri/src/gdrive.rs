@@ -126,7 +126,7 @@ impl CloudProvider for GDrive {
                         .unwrap()
                         .to_string()
                         .replace("\\", "/"),
-                    is_dir: GDrive::is_dir(&file) as i8,
+                    is_dir: Self::is_dir(&file) as i8,
                     size: file.size.unwrap_or("0".to_string()),
                     extension: format!(".{}", file.file_extension.unwrap_or("".to_string())),
                     last_modified: {
@@ -154,6 +154,8 @@ impl CloudProvider for GDrive {
         let fname = cached_file.name.as_ref().unwrap();
         let saved_path = format!("{}{}", to_path, fname);
 
+        dbg_log(format!("Downloading {} to {}", from_path, saved_path));
+
         self.drive
             .as_ref()
             .unwrap()
@@ -168,7 +170,7 @@ impl CloudProvider for GDrive {
 
     fn upload(&mut self, from_path: &str, to_path: &str) -> Result<(), String> {
         if fs::metadata(from_path).unwrap().is_dir() {
-            self.create_dir(from_path, to_path)?;
+            self.create_dir(&from_path.replace("\\", "/"), to_path)?;
 
             let children = fs::read_dir(from_path)
                 .map_err(|e| e.to_string())?
@@ -203,7 +205,14 @@ impl CloudProvider for GDrive {
         }
 
         let md = File {
-            name: Some(from_path.split('/').last().unwrap().to_string()),
+            name: Some(
+                from_path
+                    .replace('\\', "/")
+                    .split('/')
+                    .last()
+                    .unwrap()
+                    .to_string(),
+            ),
             parents: Some(vec![self
                 .path2file
                 .get(to_path)
@@ -323,7 +332,7 @@ impl CloudProvider for GDrive {
                 let file_path = format!("gdrive:/{}", file.name.clone().unwrap());
                 self.path2file.insert(file_path.clone(), file.clone());
 
-                let is_file = !GDrive::is_dir(&file);
+                let is_file = !Self::is_dir(&file);
                 search_result.push(DirWalkerEntry {
                     name: file.name.clone().unwrap(),
                     path: file_path,
@@ -396,7 +405,7 @@ impl GDrive {
 
     fn calc_size(&self, file: &File, total_items: &mut u64) -> u64 {
         *total_items += 1;
-        if GDrive::is_dir(file) {
+        if Self::is_dir(file) {
             let mut size = 0;
 
             let children = self
@@ -422,15 +431,47 @@ impl GDrive {
         }
     }
 
-    pub fn copy(&mut self, from: &str, to: &str) -> Result<(), String> {
+    pub fn copy(&mut self, from_path: &str, to_path: &str) -> Result<(), String> {
         if self.drive.is_none() {
             self.authenticate()?;
         }
 
+        let from = &from_path.replace("\\", "/");
+        let to = &to_path.replace("\\", "/");
+
         if to.starts_with("gdrive:") {
             if from.starts_with("gdrive:") {
                 // Gdrive to Gdrive copy
-                todo!();
+                let item = self.path2file.get(from).unwrap();
+                let item_name = item.name.clone().unwrap();
+                let parent_item = self.path2file.get(to).unwrap();
+
+                if Self::is_dir(item) {
+                    self.create_dir(from, to)?;
+
+                    let children = self.read_dir(&PathBuf::from(&from))?;
+                    self.copy_items(children, format!("{}/{}", to, item_name).as_str())?;
+                } else {
+                    let metadata = File {
+                        parents: Some(vec![parent_item.id.clone().unwrap()]),
+                        ..Default::default()
+                    };
+
+                    let copied_file = self
+                        .drive
+                        .as_ref()
+                        .unwrap()
+                        .files
+                        .copy(item.id.as_ref().unwrap())
+                        .metadata(&metadata)
+                        .execute()
+                        .map_err(|e| e.to_string())?;
+
+                    self.path2file.insert(
+                        format!("{}/{}", to, &copied_file.name.as_ref().unwrap()),
+                        copied_file,
+                    );
+                }
             } else {
                 // Local to Gdrive copy
                 self.upload(from, to)?;
