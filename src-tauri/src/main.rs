@@ -1352,9 +1352,21 @@ async fn arr_compress_items(arr_items: Vec<String>, compression_level: i32, app_
 }
 
 #[tauri::command]
-async fn create_folder(folder_name: String) {
-    let new_folder_path = PathBuf::from(&folder_name);
-    let _ = fs::create_dir(CURRENT_DIR.lock().await.join(new_folder_path));
+async fn create_folder(folder_name: String) -> Result<(), String> {
+    let new_folder_path = CURRENT_DIR.lock().await.join(&folder_name);
+
+    if new_folder_path.starts_with("gdrive:") {
+        let mut gdrive = get_gdrive().await?.lock().await;
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            gdrive.create_dir(&folder_name, new_folder_path.to_str().unwrap())
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    } else {
+        let _ = fs::create_dir(CURRENT_DIR.lock().await.join(new_folder_path));
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -1369,6 +1381,15 @@ async fn rename_element(
     new_name: String,
     app_window: Window,
 ) -> Result<Vec<FDir>, String> {
+    if path.starts_with("gdrive:") {
+        let mut gdrive = get_gdrive().await?.lock().await;
+        let _ = tauri::async_runtime::spawn_blocking(move || gdrive.rename(&path, &new_name))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        return list_dirs().await;
+    }
+
     let renamed = fs::rename(
         CURRENT_DIR.lock().await.join(&path.replace("\\", "/")),
         CURRENT_DIR.lock().await.join(&new_name.replace("\\", "/")),
@@ -1381,7 +1402,7 @@ async fn rename_element(
     } else {
         dbg_log(format!("Renamed from {} to {}", path, new_name));
     }
-    return list_dirs().await;
+    list_dirs().await
 }
 
 #[tauri::command]

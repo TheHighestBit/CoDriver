@@ -29,6 +29,8 @@ pub trait CloudProvider {
     fn copy_items(&mut self, arr_items: Vec<FDir>, copy_to_path: &str) -> Result<(), String>;
 
     fn delete(&mut self, path: &str) -> Result<(), String>;
+
+    fn rename(&mut self, path: &str, new_name: &str) -> Result<(), String>;
 }
 
 pub struct GDrive {
@@ -55,7 +57,11 @@ impl CloudProvider for GDrive {
                     Credentials::from_file(&creds_path, &scopes).map_err(|e| e.to_string())?;
 
                 if !credentials.are_valid() {
-                    credentials.refresh().map_err(|e| e.to_string())?;
+                    if credentials.refresh().map_err(|e| e.to_string()).is_err() {
+                        credentials =
+                            Credentials::from_client_secrets_file(&client_secrets_path, &scopes)
+                                .map_err(|e| e.to_string())?;
+                    }
 
                     credentials.store(&creds_path).map_err(|e| e.to_string())?;
                 }
@@ -280,7 +286,7 @@ impl CloudProvider for GDrive {
 
         let dir_name = from_path.split('/').last().unwrap();
 
-        dbg_log(format!("Creating directory {}/{}", to_path, &dir_name,));
+        dbg_log(format!("Creating directory {}/{}", to_path, &dir_name));
 
         let md = File {
             name: Some(dir_name.to_string()),
@@ -399,6 +405,31 @@ impl CloudProvider for GDrive {
             .metadata(md)
             .execute()
             .map_err(|e| e.to_string())?;
+
+        Ok(())
+    }
+
+    fn rename(&mut self, path: &str, new_name: &str) -> Result<(), String> {
+        let item = self.path2file.get_mut(path).ok_or("item not in cache")?;
+        let md = File {
+            name: Some(new_name.to_string()),
+            ..Default::default()
+        };
+
+        let updated_file = self
+            .drive
+            .as_ref()
+            .unwrap()
+            .files
+            .update(item.id.as_ref().unwrap())
+            .upload_type(UploadType::Multipart)
+            .metadata(md)
+            .execute()
+            .map_err(|e| e.to_string())?;
+
+        let new_path = path.replace(item.name.as_ref().unwrap(), new_name);
+
+        self.path2file.insert(new_path, updated_file);
 
         Ok(())
     }

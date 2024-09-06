@@ -2059,7 +2059,7 @@ function renameElementInputPrompt(item) {
 
 async function createFolder(folderName) {
     let isDualPaneEnabled = IsDualPaneEnabled;
-    await invoke("create_folder", {folderName, isDualPaneEnabled});
+    await invoke("create_folder", {folderName, isDualPaneEnabled}).catch((e) => showToast(e, ToastType.ERROR, 5000));
     listDirectories();
 }
 
@@ -2069,7 +2069,7 @@ async function createFile(fileName) {
 }
 
 async function renameElement(path, newName) {
-    await invoke("rename_element", {path, newName, appWindow});
+    await invoke("rename_element", {path, newName, appWindow}).catch((e) => showToast(e, ToastType.ERROR, 5000));
     IsInputFocused = false;
     await listDirectories();
 }
